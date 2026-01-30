@@ -98,6 +98,7 @@
 #define DEEMPHASIS_NONE         0
 #define DEEMPHASIS_FM_EU        0.000050
 #define DEEMPHASIS_FM_USA       0.000075
+#define PCM                     1           // audio format
 
 typedef enum
 {
@@ -235,6 +236,23 @@ struct controller_state
 	pthread_mutex_t hop_m;
 };
 
+struct riff_header
+{
+    char     chunkID[4];     // "RIFF"
+    uint32_t chunkSize;      // Total file size - 8 bytes
+    char     format[4];      // "WAVE"
+    char     subChunk1ID[4]; // "fmt "
+    uint32_t subChunk1Size;  // Size of the fmt sub-chunk
+    uint16_t formatTag;      // WAVE_FORMAT_PCM (0x0001)
+    uint16_t numChannels;    // Number of channels (i.e.: 1 for mono, 2 for stereo)
+    uint32_t samplesPerSec;  // Sample rate (i.e.: 44100)
+    uint32_t avgBytesPerSec; // channels * samplesPerSec * bitsPerSample / 8
+    uint16_t blockAlign;     // channels * bitsPerSample / 8
+    uint16_t bitsPerSample;  // Bits per sample (i.e.: 16)
+    char     subChunk2ID[4]; // "data"
+    uint32_t subChunk2Size;  // Size of the audio data (fileSize - 44 bytes)
+};
+
 typedef struct
 {
 	// Two socket descriptors which are just integer numbers used to access a socket
@@ -266,6 +284,7 @@ struct dongle_state dongle;
 struct demod_state demod;
 struct output_state output;
 struct controller_state controller;
+struct riff_header header;
 connection_state connection;
 json_rpc_state json_rpc;
 
@@ -1350,6 +1369,24 @@ void sanity_checks(void)
 
 }
 
+void header_init(int ch)
+{
+    memcpy(header.chunkID, "RIFF", 4);
+    memcpy(header.format, "WAVE", 4);
+    memcpy(header.subChunk1ID, "fmt ", 4);
+    memcpy(header.subChunk2ID, "data", 4);
+
+    header.subChunk1Size = 16;
+    header.formatTag = PCM;
+    header.numChannels = (short int)ch;
+    header.samplesPerSec = demod.rate_out2;
+    header.bitsPerSample = 16;
+    header.avgBytesPerSec = header.samplesPerSec * header.numChannels * header.bitsPerSample / 8;
+    header.blockAlign = header.numChannels * header.bitsPerSample / 8;
+    header.subChunk2Size = 0;	// set to 0 length as we have no idea how much data is in a live stream
+    header.chunkSize = 36 + header.subChunk2Size;
+}
+
 static void *
 connection_thread_fn(void *arg)
 {
@@ -1379,18 +1416,6 @@ connection_thread_fn(void *arg)
     'a','u','d','i','o','/','w','a','v',0x0d,0x0a,0x43,0x61,0x63,0x68,0x65,0x2d,0x43,
     0x6f,0x6e,0x74,0x72,0x6f,0x6c,0x3a,0x20,0x6e,0x6f,0x2d,0x63,0x61,0x63,0x68,0x65,
     0x0d,0x0a,0x0d,0x0a
-    };
-
-    // 0x18 is sample rate, 0x1c is rate * channels * bytes per sample
-    char WAVHeaderMono[] = {
-    0x52,0x49, 0x46,0x46, 0x64,0x19, 0xff,0x7f, 0x57,0x41, 0x56,0x45, 0x66,0x6d, 0x74,0x20,
-    0x10,0x00, 0x00,0x00, 0x01,0x00, 0x01,0x00, 0x80,0xbb, 0x00,0x00, 0x80,0xbb, 0x00,0x00,
-    0x02,0x00, 0x10,0x00, 0x64,0x61, 0x74,0x61, 0x40,0x19, 0xff,0x7f, 0x00,0x00, 0x00,0x00
-    };
-    char WAVHeaderStereo[] = {
-    0x52,0x49, 0x46,0x46, 0x64,0x19, 0xff,0x7f, 0x57,0x41, 0x56,0x45, 0x66,0x6d, 0x74,0x20,
-    0x10,0x00, 0x00,0x00, 0x01,0x00, 0x02,0x00, 0x80,0xbb, 0x00,0x00, 0x80,0xbb, 0x00,0x00,
-    0x04,0x00, 0x10,0x00, 0x64,0x61, 0x74,0x61, 0x40,0x19, 0xff,0x7f, 0x00,0x00, 0x00,0x00
     };
 
 	char TCPRead[1024];
@@ -1468,8 +1493,6 @@ connection_thread_fn(void *arg)
 
 				demod.deemph = DEEMPHASIS_FM_EU;
 				demod.lpr.mode = 2;
-
-				send(ConnectionDesc, WAVHeaderStereo, sizeof(WAVHeaderStereo), 0);
 			}
 			else // Mono
 			{
@@ -1477,9 +1500,10 @@ connection_thread_fn(void *arg)
 
 				demod.deemph = DEEMPHASIS_FM_EU;
 				demod.lpr.mode = 1;
-
-				send(ConnectionDesc, WAVHeaderMono, sizeof(WAVHeaderMono), 0);
 			}
+			// Send updated RIFF/WAVfmt header
+			header_init(demod.lpr.mode);
+			send(ConnectionDesc, &header, sizeof(header), 0);
 
 			isStartStream = true;
 		}
