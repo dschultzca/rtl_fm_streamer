@@ -127,8 +127,7 @@ uint32_t output_buffer_rpos = 0,
 
 uint32_t SentTotal = 0;
 static int ConnectionDesc;
-bool isStartStream;
-bool isReading;
+bool isReading, isStartStream, stopStreaming;
 struct timespec start, connected;
 
 struct lp_real
@@ -217,8 +216,6 @@ struct output_state
 {
 	int exit_flag;
 	pthread_t thread;
-	FILE *file;
-	char *filename;
 	int rate;
 	int16_t *result;
 	int result_len;
@@ -1110,23 +1107,24 @@ output_thread_fn(void *arg)
 		if (isStartStream)
 		{
 			SentNum = send(ConnectionDesc, buf, len, MSG_NOSIGNAL);
-			if (SentNum < 0)
+			if (SentNum < 0 || stopStreaming)
 			{
 				clock_gettime(CLOCK_MONOTONIC, &connected); // Get current time
 				elapsed_conn = connected.tv_sec - start.tv_sec;
 				elapsed_conn += (connected.tv_nsec - start.tv_nsec) / 1000000000.0; 
-                fprintf(stderr, "Error sending stream: \"%s\". Closing the connection!\n", strerror(errno));
-				fprintf(stderr, "Connected %.3f seconds, PCM Bytes sent: %u\n", elapsed_conn, SentTotal);
+				fprintf(stderr, "Closing streaming connection: %s\n", strerror(errno));
+				fprintf(stderr, "Connected for %.3f seconds, sent %u bytes\n", elapsed_conn, SentTotal);
+				stopStreaming = false;
+				SentTotal = 0;
 
 				// Close connection
 				close(ConnectionDesc);
-				isStartStream = false;
 
 				// Stop reading samples from dongle
 				rtlsdr_cancel_async(dongle.dev);
 				pthread_join(dongle.thread, NULL);
 				isReading = false;
-				SentTotal = 0;
+				isStartStream = false;
 			}
 			SentTotal += len;
 		}
@@ -1442,9 +1440,14 @@ connection_thread_fn(void *arg)
 		ConnectionDescNew = accept(pconnection->SocketDesc, (struct sockaddr *) &pconnection->client_addr,
 				&pconnection->size);
 
-		// Accept only one connection thus close old connection
-		isStartStream = false;
-		close(ConnectionDesc);
+		// Accept only one connection thus gracefully close old connection
+		if (isStartStream)
+		{
+			stopStreaming = true;
+			while (isStartStream)
+				usleep(5000);
+			stopStreaming = false;
+		}
 
 		/* close old dongle thread */
 		if (isReading)
@@ -1461,8 +1464,9 @@ connection_thread_fn(void *arg)
 		}
 		else
 		{
-            fprintf(stderr, "Connected with %s\n",
-				inet_ntop(AF_INET, (struct sockaddr *) &pconnection->client_addr.sin_addr, remote_addr, INET_ADDRSTRLEN));
+			fprintf(stderr, "New connection with %s:%u\n",
+				inet_ntop(AF_INET, (struct sockaddr *) &pconnection->client_addr.sin_addr, remote_addr, INET_ADDRSTRLEN),
+				ntohs(pconnection->client_addr.sin_port));
 			ConnectionDesc = ConnectionDescNew;
 
 			// Start reading samples from dongle

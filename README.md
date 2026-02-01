@@ -15,11 +15,6 @@ Default port: 2346
 
     $ ./rtl_fm_streamer
 
-**Docker Image**
-
-Thanks to mrbluebrett you can also use a Docker image
-https://hub.docker.com/r/mrbluebrett/rtl_fm_streamer
-
 Options
 -------
 The options "-P" defines the port where the HTTP server is listen on.
@@ -85,7 +80,7 @@ Limitations
 
 Known Problems
 --------------
-- Occasional segmentation faults after disconnect of a client
+- Occasional segmentation faults after disconnect of a client (hopefully now squashed)
 
 Building
 -------
