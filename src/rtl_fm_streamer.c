@@ -52,12 +52,14 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #else
 #include <windows.h>
 #include <fcntl.h>
@@ -125,6 +127,8 @@ uint32_t output_buffer_rpos = 0,
 
 static int ConnectionDesc;
 bool isReading, isStartStream, stopStreaming;
+uint32_t SentTotal = 0;
+struct timespec connStart, connStop;
 
 struct lp_real
 {
@@ -1082,6 +1086,7 @@ output_thread_fn(void *arg)
 	struct output_state *s = arg;
 	char buf[16384];
 	uint32_t len = 16384;
+	double elapsed_conn = 0;
 
 	while (!do_exit)
 	{
@@ -1104,7 +1109,11 @@ output_thread_fn(void *arg)
 			SentNum = send(ConnectionDesc, buf, len, MSG_NOSIGNAL);
 			if (SentNum < 0 || stopStreaming)
 			{
-				fprintf(stderr, "Error sending stream: \"%s\". Close the connection!\n", strerror(errno));
+				clock_gettime(CLOCK_MONOTONIC, &connStop); // Get current time
+				elapsed_conn = connStop.tv_sec - connStart.tv_sec;
+				elapsed_conn += (connStop.tv_nsec - connStart.tv_nsec) / 1000000000.0; 
+				fprintf(stderr, "Closing streaming connection: %s\n", strerror(errno));
+				fprintf(stderr, "Connected for %.3f seconds, sent %u bytes\n", elapsed_conn, SentTotal);
 
 				// Close connection
 				close(ConnectionDesc);
@@ -1113,9 +1122,11 @@ output_thread_fn(void *arg)
 				rtlsdr_cancel_async(dongle.dev);
 				pthread_join(dongle.thread, NULL);
 				isReading = false;
+				SentTotal = 0;
 				stopStreaming = false;
 				isStartStream = false;	// needs to be the last step to avoid rtlsdr_cancel_async race condition
 			}
+			SentTotal += SentNum;
 		}
 	}
 
@@ -1420,6 +1431,7 @@ connection_thread_fn(void *arg)
 	bool isConnection;
 	int ConnectionDescNew;
 	unsigned int isStereo, deemph  = 0;
+	char remote_addr[INET_ADDRSTRLEN];
 
 	while (!do_exit)
 	{
@@ -1451,7 +1463,9 @@ connection_thread_fn(void *arg)
 		}
 		else
 		{
-			fprintf(stderr, "Connected\n");
+			fprintf(stderr, "New connection with %s:%u\n",
+				inet_ntop(AF_INET, (struct sockaddr *) &pconnection->client_addr.sin_addr, remote_addr, INET_ADDRSTRLEN),
+				ntohs(pconnection->client_addr.sin_port));
 			ConnectionDesc = ConnectionDescNew;
 
 			// Start reading samples from dongle
@@ -1512,6 +1526,7 @@ connection_thread_fn(void *arg)
 			// Send updated RIFF/WAVfmt header
 			header_init(demod.lpr.mode);
 			send(ConnectionDesc, &header, sizeof(header), 0);
+			clock_gettime(CLOCK_MONOTONIC, &connStart); // Get start time of this connection
 
 			isStartStream = true;
 		}
