@@ -32,12 +32,29 @@ Streaming
 ---------
 To connect to the server you can use KODI, VLC or mplayer. Just connect to the URL
 
-    mono: "http://IP:port/FrequencyInHerz"
-    mono: "http://IP:port/FrequencyInHerz/0"
-    stereo: "http://IP:port/FrequencyInHerz/1"
+mono with default de-epmhasis:  
+`http://IP:port/FrequencyInHerz`
+
+mono with default de-epmhasis:  
+`http://IP:port/FrequencyInHerz/0`
+
+stereo with default de-epmhasis:  
+`http://IP:port/FrequencyInHerz/1`
+
+mono with 50usec de-epmhasis:  
+`http://IP:port/FrequencyInHerz/0/50`
+
+stereo with 50usec de-epmhasis:  
+`http://IP:port/FrequencyInHerz/1/50`
+
+mono with 75usec de-epmhasis:  
+`http://IP:port/FrequencyInHerz/0/75`
+
+stereo with 75usec de-epmhasis:  
+`http://IP:port/FrequencyInHerz/1/75`
 
 To use this tool in KODI simply create a *.strm file e.g. "FM\_93_2.strm"
- 
+
     http://localhost:2346/93200000
 
 JSON-RPC API
@@ -45,7 +62,7 @@ JSON-RPC API
 rtl_fm_streamer comes with a [JSON-RPC](https://en.wikipedia.org/wiki/JSON-RPC) 1.0 API. It is listening at port 2345 but you can specify the port with the parameter "-j".
 
     $ ./rtl_fm_streamer -j 1234
-    
+
 **Provided methods**
 
 Method | Parameters | Return | Description
@@ -54,12 +71,13 @@ SetFrequency | Frequency in Hz | Frequency in Hz | Tunes to a given frequency
 GetPowerLevel | None  |  Power level in DBFS | Returns the current power level in DBFS
 
 **Example Set Frequency**
+
 client  --> rtl_fm_streamer
 
     {"method": "SetFrequency", "params": [93200000]}
-    
+
 rtl_fm_streamer  --> client
-     
+
     {"result": [93200000]}
 
 Performance
