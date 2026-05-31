@@ -1839,7 +1839,7 @@ int main(int argc, char **argv)
 
 	if (demod.deemph)
 	{
-		fprintf(stderr, "Init de-epmhasis IIR to: %.1f us\n", demod.deemph * 1e6);
+		fprintf(stderr, "Init de-emphasis IIR to: %.1f us\n", demod.deemph * 1e6);
 		demod.deemph_a = (int) lrint(1.0 / ((1.0 - exp(-1.0 / ((double) demod.rate_out * demod.deemph)))));
 		demod.deemph_lambda = (float) exp(-1.0 / ((double) output.rate * demod.deemph));
 	}
