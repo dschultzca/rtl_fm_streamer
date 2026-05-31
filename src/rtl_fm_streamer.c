@@ -53,12 +53,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <time.h>
 
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #else
 #include <windows.h>
 #include <fcntl.h>
@@ -119,7 +121,9 @@ uint32_t output_buffer_rpos = 0,
          output_buffer_size_max = 16 * MAXIMUM_BUF_LENGTH;
 
 static int ConnectionDesc;
-bool isReading, isStartStream, stopStreaming;
+bool isReading, isStartStream, stopStreaming, rptSigLevel;;
+uint32_t SentTotal = 0;
+struct timespec connStart, connStop;
 
 struct lp_real
 {
@@ -1066,6 +1070,24 @@ demod_thread_fn(void *arg)
 		}
 		pthread_rwlock_unlock(&o->rw);
 		//safe_cond_signal(&o->ready, &o->ready_m);
+
+		// Report signal level
+		if (rptSigLevel)
+		{
+			int i = 0;
+			double PowerLevel = 0.0;
+			for (i = 0; i < json_rpc.RMSShadowBuf_len; i = i + 2)
+			{
+				PowerLevel += json_rpc.RMSShadowBuf[i] * json_rpc.RMSShadowBuf[i];
+			}
+			PowerLevel /= json_rpc.RMSShadowBuf_len / 2.0;
+			PowerLevel = sqrt(PowerLevel);
+			PowerLevel = 20.0 * log10(PowerLevel);
+
+			// Calc the DBFS
+			fprintf(stderr, "Signal level %.3lf dBFS\n", PowerLevel);
+			rptSigLevel = false;
+		}
 	}
 
 	return 0;
@@ -1078,6 +1100,7 @@ output_thread_fn(void *arg)
 	struct output_state *s = arg;
 	char buf[16384];
 	uint32_t len = 16384;
+	double elapsed_conn = 0;
 
 	while (!do_exit)
 	{
@@ -1100,7 +1123,11 @@ output_thread_fn(void *arg)
 			SentNum = send(ConnectionDesc, buf, len, MSG_NOSIGNAL);
 			if (SentNum < 0 || stopStreaming)
 			{
-				fprintf(stderr, "Error sending stream: \"%s\". Close the connection!\n", strerror(errno));
+				clock_gettime(CLOCK_MONOTONIC, &connStop); // Get current time
+				elapsed_conn = connStop.tv_sec - connStart.tv_sec;
+				elapsed_conn += (connStop.tv_nsec - connStart.tv_nsec) / 1000000000.0;
+				fprintf(stderr, "Closing streaming connection: %s\n", strerror(errno));
+				fprintf(stderr, "Connected for %.3f seconds, sent %u bytes\n", elapsed_conn, SentTotal);
 
 				// Close connection
 				close(ConnectionDesc);
@@ -1109,9 +1136,11 @@ output_thread_fn(void *arg)
 				rtlsdr_cancel_async(dongle.dev);
 				pthread_join(dongle.thread, NULL);
 				isReading = false;
+				SentTotal = 0;
 				stopStreaming = false;
 				isStartStream = false;	// needs to be the last step to avoid rtlsdr_cancel_async race condition
 			}
+			SentTotal += SentNum;
 		}
 	}
 
@@ -1416,6 +1445,7 @@ connection_thread_fn(void *arg)
 	bool isConnection;
 	int ConnectionDescNew;
 	unsigned int isStereo = 0;
+	char remote_addr[INET_ADDRSTRLEN];
 
 	while (!do_exit)
 	{
@@ -1447,7 +1477,9 @@ connection_thread_fn(void *arg)
 		}
 		else
 		{
-			fprintf(stderr, "Connected\n");
+			fprintf(stderr, "New connection with %s:%u\n",
+				inet_ntop(AF_INET, (struct sockaddr *) &pconnection->client_addr.sin_addr, remote_addr, INET_ADDRSTRLEN),
+				ntohs(pconnection->client_addr.sin_port));
 			ConnectionDesc = ConnectionDescNew;
 
 			// Start reading samples from dongle
@@ -1477,7 +1509,6 @@ connection_thread_fn(void *arg)
 
 			// Tune
 			optimal_settings(controller.freqs[0], demod.rate_in);
-			/* at this point this program can hang from unknown reasons */
 			verbose_set_frequency(dongle.dev, dongle.freq);
 
 			// Start streaming
@@ -1498,8 +1529,10 @@ connection_thread_fn(void *arg)
 			// Send updated RIFF/WAVfmt header
 			header_init(demod.lpr.mode);
 			send(ConnectionDesc, &header, sizeof(header), 0);
+			clock_gettime(CLOCK_MONOTONIC, &connStart); // Get start time of this connection
 
 			isStartStream = true;
+			rptSigLevel = true;
 		}
 
 		usleep(100000);
